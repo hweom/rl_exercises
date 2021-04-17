@@ -8,7 +8,7 @@ pub struct ActionDestination {
     pub reward: f32,
 }
 
-pub struct ActionResult {
+pub struct Action {
     // Possible destination states with associated probabilities and rewards.
     // All destination probabilities must sum to 1.
     pub dest_states: HashMap<StateId, ActionDestination>,
@@ -17,7 +17,7 @@ pub struct ActionResult {
 pub struct State {
     // Possible actions in this state.
     // Empty if this is a final state.
-    pub actions: HashMap<ActionId, ActionResult>,
+    pub actions: HashMap<ActionId, Action>,
 }
 
 pub struct Env {
@@ -32,6 +32,31 @@ pub struct PolicyState {
 
 pub struct Policy {
     pub states: HashMap<StateId, PolicyState>,
+}
+
+// Returns the action value given the action and state value function.
+fn get_action_value(action: &Action, state_values: &HashMap<StateId, f32>) -> f32 {
+    action
+        .dest_states
+        .iter()
+        .map(|(state_id, dest)| {
+            dest.probability * (dest.reward + state_values.get(state_id).unwrap_or(&0.0))
+        })
+        .sum()
+}
+
+pub fn deterministic_action(dest_state: StateId, reward: f32) -> Action {
+    let mut dest_states = HashMap::new();
+    dest_states.insert(
+        dest_state,
+        ActionDestination {
+            probability: 1.0,
+            reward: reward,
+        },
+    );
+    Action {
+        dest_states: dest_states,
+    }
 }
 
 // Performs a single iteration to determine the next state-value function.
@@ -55,17 +80,8 @@ pub fn iteration(
             .expect(&format!("No policy for state {}", state_id));
 
         let mut state_value = 0.0;
-        for (action_id, action_result) in state.actions.iter() {
-            //            print!("Action {}_{} -> ", state_id, action_id);
-            let action_value: f32 = action_result
-                .dest_states
-                .iter()
-                .map(|(state_id, dest)| {
-                    dest.probability
-                        * (dest.reward + prev_state_values.get(state_id).unwrap_or(&0.0))
-                })
-                .sum();
-
+        for (action_id, action) in state.actions.iter() {
+            let action_value = get_action_value(action, prev_state_values);
             let action_prob = state_policy.actions.get(action_id).unwrap_or(&0.0);
             state_value += action_value * action_prob;
         }
@@ -76,4 +92,48 @@ pub fn iteration(
     }
 
     (new_state_values, max_delta)
+}
+
+pub fn make_greedy_policy(env: &Env, state_values: &HashMap<StateId, f32>) -> Policy {
+    let mut policy_states = HashMap::new();
+
+    for (state_id, state) in &env.states {
+        if state.actions.is_empty() {
+            continue;
+        }
+
+        // Determine maximum possible reward.
+        let max_action_reward = state
+            .actions
+            .iter()
+            .map(|(_, action)| get_action_value(action, state_values))
+            .fold(f32::NEG_INFINITY, |a, b| a.max(b));
+
+        // Find action IDs that yield the maximum reward.
+        let action_ids: Vec<&ActionId> = state
+            .actions
+            .iter()
+            .filter(|(_, action)| get_action_value(action, state_values) == max_action_reward)
+            .map(|(action_id, _)| action_id)
+            .collect();
+
+        assert!(!action_ids.is_empty());
+
+        let action_probability = 1.0 / action_ids.len() as f32;
+
+        // Create a policy that takes either of the max reward action with equal probability.
+        policy_states.insert(
+            state_id.clone(),
+            PolicyState {
+                actions: action_ids
+                    .iter()
+                    .map(|action_id| (action_id.to_string(), action_probability))
+                    .collect(),
+            },
+        );
+    }
+
+    Policy {
+        states: policy_states,
+    }
 }
