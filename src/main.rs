@@ -65,12 +65,12 @@ fn coin_bet() {
     let mut uniform_reward = 0.0;
     let mut cautious_reward = 0.0;
     let mut optimal_reward = 0.0;
-    let start_state = "10".to_string();
+    let start_state = 10;
     for _ in 0..simulations {
-        uniform_reward = uniform_reward + run_simulation(&env, &uniform_policy, &start_state, 1000);
+        uniform_reward = uniform_reward + run_simulation(&env, &uniform_policy, start_state, 1000);
         cautious_reward =
-            cautious_reward + run_simulation(&env, &cautious_policy, &start_state, 1000);
-        optimal_reward = optimal_reward + run_simulation(&env, &optimal_policy, &start_state, 1000);
+            cautious_reward + run_simulation(&env, &cautious_policy, start_state, 1000);
+        optimal_reward = optimal_reward + run_simulation(&env, &optimal_policy, start_state, 1000);
     }
     println!(
         "Average uniform reward: {}",

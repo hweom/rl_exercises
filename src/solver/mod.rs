@@ -1,10 +1,8 @@
 use std::collections::HashMap;
+use std::fmt::Debug;
 use std::hash::Hash;
 
 use rand::prelude::*;
-
-pub use String as StateId;
-pub use String as ActionId;
 
 #[derive(Debug, Default, Clone)]
 pub struct ActionDestination {
@@ -13,38 +11,42 @@ pub struct ActionDestination {
 }
 
 #[derive(Debug, Default, Clone)]
-pub struct Action {
+pub struct ActionResult<S: Eq + Hash> {
     // Possible destination states with associated probabilities and rewards.
     // All destination probabilities must sum to 1.
-    pub dest_states: HashMap<StateId, ActionDestination>,
+    pub dest_states: HashMap<S, ActionDestination>,
 }
 
 #[derive(Debug, Default, Clone)]
-pub struct State {
+pub struct StateActions<S: Eq + Hash, A: Eq + Hash> {
     // Possible actions in this state.
     // Empty if this is a final state.
-    pub actions: HashMap<ActionId, Action>,
+    pub actions: HashMap<A, ActionResult<S>>,
 }
 
 #[derive(Debug, Default, Clone)]
-pub struct Env {
-    pub states: HashMap<StateId, State>,
+pub struct Env<S: Eq + Hash, A: Eq + Hash> {
+    pub states: HashMap<S, StateActions<S, A>>,
 }
 
 #[derive(Debug, Default, Clone)]
-pub struct PolicyState {
+pub struct PolicyState<A: Eq + Hash> {
     // Possible actions and their probabilities.
     // All probabilities must sum to 1.
-    pub actions: HashMap<ActionId, f64>,
+    pub actions: HashMap<A, f64>,
 }
 
 #[derive(Debug, Default, Clone)]
-pub struct Policy {
-    pub states: HashMap<StateId, PolicyState>,
+pub struct Policy<S: Eq + Hash, A: Eq + Hash> {
+    pub states: HashMap<S, PolicyState<A>>,
 }
 
-// Returns the action value given the action and state value function.
-fn get_action_value(action: &Action, state_values: &HashMap<StateId, f64>, discount: f64) -> f64 {
+// Returns the action value given the action results and state value function.
+fn get_action_value<S: Eq + Hash>(
+    action: &ActionResult<S>,
+    state_values: &HashMap<S, f64>,
+    discount: f64,
+) -> f64 {
     action
         .dest_states
         .iter()
@@ -56,7 +58,7 @@ fn get_action_value(action: &Action, state_values: &HashMap<StateId, f64>, disco
 
 fn choose_random_key<K, V, F>(map: &HashMap<K, V>, mut f: F) -> K
 where
-    K: Clone + Ord + Hash + Eq,
+    K: Copy + Ord + Hash + Eq,
     F: FnMut(&V) -> f64,
 {
     let total_probablity: f64 = map.iter().map(|(k, v)| f(v)).sum();
@@ -68,7 +70,7 @@ where
     for k in keys.iter() {
         let probability = f(map.get(k).unwrap());
         if remaining_probability <= probability {
-            return (*k).clone();
+            return **k;
         }
 
         remaining_probability = remaining_probability - probability;
@@ -78,7 +80,7 @@ where
     panic!();
 }
 
-pub fn deterministic_action(dest_state: StateId, reward: f64) -> Action {
+pub fn deterministic_action<S: Eq + Hash>(dest_state: S, reward: f64) -> ActionResult<S> {
     let mut dest_states = HashMap::new();
     dest_states.insert(
         dest_state,
@@ -87,42 +89,42 @@ pub fn deterministic_action(dest_state: StateId, reward: f64) -> Action {
             reward: reward,
         },
     );
-    Action {
+    ActionResult {
         dest_states: dest_states,
     }
 }
 
 // Performs a single iteration to determine the next state-value function.
 // Returns new state-value function and a maximum change in state-values.
-pub fn evaluate_policy(
-    env: &Env,
-    policy: &Policy,
-    prev_state_values: &HashMap<StateId, f64>,
+pub fn evaluate_policy<S: Copy + Eq + Hash + Debug, A: Eq + Hash>(
+    env: &Env<S, A>,
+    policy: &Policy<S, A>,
+    prev_state_values: &HashMap<S, f64>,
     discount: f64,
-) -> (HashMap<StateId, f64>, f64) {
+) -> (HashMap<S, f64>, f64) {
     let mut new_state_values = HashMap::new();
     let mut max_delta: f64 = 0.0;
 
-    for (state_id, state) in env.states.iter() {
-        if state.actions.is_empty() {
+    for (state, state_actions) in env.states.iter() {
+        if state_actions.actions.is_empty() {
             continue;
         }
 
         let state_policy = policy
             .states
-            .get(state_id)
-            .expect(&format!("No policy for state {}", state_id));
+            .get(state)
+            .expect(&format!("No policy for state {:?}", state));
 
         let mut state_value = 0.0;
-        for (action_id, action) in state.actions.iter() {
-            let action_value = get_action_value(action, prev_state_values, discount);
-            let action_prob = state_policy.actions.get(action_id).unwrap_or(&0.0);
+        for (action, action_result) in state_actions.actions.iter() {
+            let action_value = get_action_value(action_result, prev_state_values, discount);
+            let action_prob = state_policy.actions.get(action).unwrap_or(&0.0);
             state_value += action_value * action_prob;
         }
 
-        let prev_state_value = prev_state_values.get(state_id).unwrap_or(&0.0);
+        let prev_state_value = prev_state_values.get(state).unwrap_or(&0.0);
         max_delta = max_delta.max((prev_state_value - state_value).abs());
-        new_state_values.insert(state_id.clone(), state_value);
+        new_state_values.insert(*state, state_value);
     }
 
     (new_state_values, max_delta)
@@ -130,50 +132,52 @@ pub fn evaluate_policy(
 
 // Performs a single state value function iteration.
 // Returns new state-value function and a maximum change in state-values.
-pub fn iterate_state_value(
-    env: &Env,
-    prev_state_values: &HashMap<StateId, f64>,
+pub fn iterate_state_value<S: Copy + Eq + Hash, A: Eq + Hash>(
+    env: &Env<S, A>,
+    prev_state_values: &HashMap<S, f64>,
     discount: f64,
-) -> (HashMap<StateId, f64>, f64) {
+) -> (HashMap<S, f64>, f64) {
     let mut new_state_values = HashMap::new();
     let mut max_delta: f64 = 0.0;
 
-    for (state_id, state) in env.states.iter() {
-        if state.actions.is_empty() {
+    for (state, state_actions) in env.states.iter() {
+        if state_actions.actions.is_empty() {
             continue;
         }
 
-        let best_action_value = state
+        let best_action_value = state_actions
             .actions
             .iter()
-            .map(|(_action_id, action)| get_action_value(action, prev_state_values, discount))
+            .map(|(_, action_result)| get_action_value(action_result, prev_state_values, discount))
             .fold(f64::NEG_INFINITY, |a, b| a.max(b));
-        new_state_values.insert(state_id.clone(), best_action_value);
+        new_state_values.insert(*state, best_action_value);
 
-        let prev_state_value = prev_state_values.get(state_id).unwrap_or(&0.0);
+        let prev_state_value = prev_state_values.get(state).unwrap_or(&0.0);
         max_delta = max_delta.max(best_action_value - prev_state_value);
     }
 
     (new_state_values, max_delta)
 }
 
-pub fn make_uniform_policy(env: &Env) -> Policy {
+pub fn make_uniform_policy<S: Copy + Eq + Hash, A: Copy + Eq + Hash>(
+    env: &Env<S, A>,
+) -> Policy<S, A> {
     let mut policy_states = HashMap::new();
 
-    for (state_id, state) in &env.states {
-        if state.actions.is_empty() {
+    for (state, state_actions) in &env.states {
+        if state_actions.actions.is_empty() {
             continue;
         }
 
-        let action_probability = 1.0 / state.actions.len() as f64;
+        let action_probability = 1.0 / state_actions.actions.len() as f64;
         let policy_state = PolicyState {
-            actions: state
+            actions: state_actions
                 .actions
                 .keys()
-                .map(|action_id| ((*action_id).clone(), action_probability))
+                .map(|action| (*action, action_probability))
                 .collect(),
         };
-        policy_states.insert(state_id.clone(), policy_state);
+        policy_states.insert(*state, policy_state);
     }
 
     Policy {
@@ -181,47 +185,48 @@ pub fn make_uniform_policy(env: &Env) -> Policy {
     }
 }
 
-pub fn make_greedy_policy(
-    env: &Env,
-    state_values: &HashMap<StateId, f64>,
+pub fn make_greedy_policy<S: Copy + Eq + Hash, A: Copy + Eq + Hash>(
+    env: &Env<S, A>,
+    state_values: &HashMap<S, f64>,
     discount: f64,
-) -> Policy {
+) -> Policy<S, A> {
     let mut policy_states = HashMap::new();
 
-    for (state_id, state) in &env.states {
-        if state.actions.is_empty() {
+    for (state, state_actions) in &env.states {
+        if state_actions.actions.is_empty() {
             continue;
         }
 
         // Determine maximum possible reward.
-        let max_action_reward = state
+        let max_action_reward = state_actions
             .actions
             .iter()
-            .map(|(_, action)| get_action_value(action, state_values, discount))
+            .map(|(_, action_actions)| get_action_value(action_actions, state_values, discount))
             .fold(f64::NEG_INFINITY, |a, b| a.max(b));
 
         // Find action IDs that yield the maximum reward.
-        let action_ids: Vec<&ActionId> = state
+        let actions: Vec<&A> = state_actions
             .actions
             .iter()
-            .filter(|(_, action)| {
+            .filter(|(_, action_result)| {
                 // Don't require exact equality to forgive rounding errors.
-                (get_action_value(action, state_values, discount) - max_action_reward).abs() < 1e-6
+                (get_action_value(action_result, state_values, discount) - max_action_reward).abs()
+                    < 1e-6
             })
-            .map(|(action_id, _)| action_id)
+            .map(|(action, _)| action)
             .collect();
 
-        assert!(!action_ids.is_empty());
+        assert!(!actions.is_empty());
 
-        let action_probability = 1.0 / action_ids.len() as f64;
+        let action_probability = 1.0 / actions.len() as f64;
 
         // Create a policy that takes either of the max reward action with equal probability.
         policy_states.insert(
-            state_id.clone(),
+            *state,
             PolicyState {
-                actions: action_ids
+                actions: actions
                     .iter()
-                    .map(|action_id| (action_id.to_string(), action_probability))
+                    .map(|action| (**action, action_probability))
                     .collect(),
             },
         );
@@ -232,30 +237,40 @@ pub fn make_greedy_policy(
     }
 }
 
-pub fn run_simulation(env: &Env, policy: &Policy, start_state_id: &StateId, max_steps: u32) -> f64 {
-    let mut state_id = start_state_id.clone();
+pub fn run_simulation<S: Copy + Eq + Hash + Debug + Ord, A: Copy + Eq + Hash + Ord>(
+    env: &Env<S, A>,
+    policy: &Policy<S, A>,
+    start_state: S,
+    max_steps: u32,
+) -> f64 {
+    let mut state = start_state;
     let mut total_reward = 0.0;
     for _ in 0..max_steps {
-        let state = env
+        let state_actions = env
             .states
-            .get(&state_id)
-            .expect(format!("State {} not found", state_id).as_str());
+            .get(&state)
+            .expect(format!("State {:?} not found", state).as_str());
 
         // Final state.
-        if state.actions.is_empty() {
+        if state_actions.actions.is_empty() {
             break;
         }
 
         // Choose action stochastically.
-        let policy_state = policy.states.get(&state_id).unwrap();
-        let action_id = choose_random_key(&policy_state.actions, |v| *v);
-        let action = state.actions.get(&action_id).unwrap();
+        let policy_state = policy.states.get(&state).unwrap();
+        let action = choose_random_key(&policy_state.actions, |v| *v);
+        let action_results = state_actions.actions.get(&action).unwrap();
 
         // Choose end state stochastically.
-        let target_state_id = choose_random_key(&action.dest_states, |v| v.probability);
+        let target_state = choose_random_key(&action_results.dest_states, |v| v.probability);
 
-        total_reward = total_reward + action.dest_states.get(&target_state_id).unwrap().reward;
-        state_id = target_state_id;
+        total_reward = total_reward
+            + action_results
+                .dest_states
+                .get(&target_state)
+                .unwrap()
+                .reward;
+        state = target_state;
     }
 
     total_reward

@@ -13,12 +13,17 @@ const RENTALS_LAMBDA2: f64 = 4.0;
 const RETURNS_LAMBDA1: f64 = 3.0;
 const RETURNS_LAMBDA2: f64 = 2.0;
 
-fn new_state_id(l1_cars: i32, l2_cars: i32) -> String {
-    format!("{}_{}", l1_cars, l2_cars)
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
+pub struct State {
+    // Number of cars on location 1 and 2.
+    l1: i32,
+    l2: i32,
 }
 
-fn new_action_id(transfers: i32) -> String {
-    format!("{}", transfers)
+impl State {
+    pub fn new(l1: i32, l2: i32) -> State {
+        State { l1: l1, l2: l2 }
+    }
 }
 
 fn poisson_prob(lambda: f64, n: i32) -> f64 {
@@ -30,10 +35,15 @@ fn poisson_tail(lambda: f64, n: i32) -> f64 {
     1.0 - (0..n).map(|i| poisson_prob(lambda, i)).sum::<f64>()
 }
 
-fn new_action(max_cars: i32, l1_day: i32, l2_day: i32, transfer: i32) -> Action {
+fn new_action_result(
+    max_cars: i32,
+    l1_day: i32,
+    l2_day: i32,
+    transfer: i32,
+) -> ActionResult<State> {
     // Collect all paths leading to different destination states with their reward
     // and the probability of activating this path from 'state_id' with 'action_id'.
-    let mut dest_states_paths: HashMap<StateId, Vec<(f64, f64)>> = HashMap::new();
+    let mut dest_states_paths: HashMap<State, Vec<(f64, f64)>> = HashMap::new();
 
     // Number of cars rented out from first location.
     for l1_out in 0..(l1_day + 1) {
@@ -87,7 +97,7 @@ fn new_action(max_cars: i32, l1_day: i32, l2_day: i32, transfer: i32) -> Action 
                     let reward = ((l1_out + l2_out) as f64) * RENT_REWARD
                         - (transfer.abs() as f64) * TRANSFER_PRICE;
 
-                    let dest_state_id = new_state_id(l1_end, l2_end);
+                    let dest_state_id = State::new(l1_end, l2_end);
 
                     let dest_state_paths = dest_states_paths.entry(dest_state_id).or_default();
 
@@ -101,14 +111,14 @@ fn new_action(max_cars: i32, l1_day: i32, l2_day: i32, transfer: i32) -> Action 
     // overall probability of arriving at that state and the mean reward *given*
     // the destination state.
     let mut dest_states = HashMap::new();
-    for (dest_state_id, paths) in dest_states_paths {
+    for (dest_state, paths) in dest_states_paths {
         let dest_state_probability = paths.iter().map(|(_r, p)| p).sum();
         assert!(dest_state_probability > 0.0);
         let mean_reward: f64 =
             paths.iter().map(|(r, p)| p * r).sum::<f64>() / dest_state_probability;
 
         dest_states.insert(
-            dest_state_id.clone(),
+            dest_state,
             ActionDestination {
                 probability: dest_state_probability,
                 reward: mean_reward,
@@ -131,12 +141,12 @@ fn new_action(max_cars: i32, l1_day: i32, l2_day: i32, transfer: i32) -> Action 
         total_probability
     );
 
-    Action {
+    ActionResult {
         dest_states: dest_states,
     }
 }
 
-pub fn new_car_rental_env(max_cars: i32) -> Env {
+pub fn new_car_rental_env(max_cars: i32) -> Env<State, i32> {
     let mut states = HashMap::new();
 
     let mut actions_cache = HashMap::new();
@@ -145,8 +155,8 @@ pub fn new_car_rental_env(max_cars: i32) -> Env {
     for l1_start in 0..(max_cars + 1) {
         // Number of cars on the second location at the day end.
         for l2_start in 0..(max_cars + 1) {
-            let state_id = new_state_id(l1_start, l2_start);
-            let mut state = State {
+            let state = State::new(l1_start, l2_start);
+            let mut state_actions = StateActions {
                 actions: HashMap::new(),
             };
 
@@ -155,32 +165,31 @@ pub fn new_car_rental_env(max_cars: i32) -> Env {
             let min_transfers = -(l2_start.min(MAX_MOVES).min(max_cars - l1_start));
             let max_transfers = l1_start.min(MAX_MOVES).min(max_cars - l2_start);
             for transfer in min_transfers..(max_transfers + 1) {
-                let action_id = new_action_id(transfer);
-
                 let l1_day = l1_start - transfer;
                 let l2_day = l2_start + transfer;
-                let action = actions_cache
+                let action_result = actions_cache
                     .entry((l1_day, l2_day))
-                    .or_insert_with(|| new_action(max_cars, l1_day, l2_day, transfer))
-                    .clone();
+                    .or_insert_with(|| new_action_result(max_cars, l1_day, l2_day, transfer));
 
-                state.actions.insert(action_id, action);
+                state_actions
+                    .actions
+                    .insert(transfer, action_result.clone());
             }
 
-            states.insert(state_id, state);
+            states.insert(state, state_actions);
         }
     }
 
     Env { states: states }
 }
 
-pub fn new_car_rental_noop_policy(env: &Env) -> Policy {
+pub fn new_car_rental_noop_policy(env: &Env<State, i32>) -> Policy<State, i32> {
     let mut policy_states = HashMap::new();
-    for (state_id, _state) in &env.states {
+    for (state, _state_actions) in &env.states {
         let mut policy_state_actions = HashMap::new();
-        policy_state_actions.insert(new_action_id(0), 1.0);
+        policy_state_actions.insert(0, 1.0);
         policy_states.insert(
-            state_id.clone(),
+            *state,
             PolicyState {
                 actions: policy_state_actions,
             },
@@ -192,7 +201,7 @@ pub fn new_car_rental_noop_policy(env: &Env) -> Policy {
     }
 }
 
-pub fn print_car_rental_policy(policy: &Policy, max_cars: i32) {
+pub fn print_car_rental_policy(policy: &Policy<State, i32>, max_cars: i32) {
     let empty_policy_state = &PolicyState {
         actions: HashMap::new(),
     };
@@ -200,20 +209,20 @@ pub fn print_car_rental_policy(policy: &Policy, max_cars: i32) {
     for r in 0..(max_cars + 1) {
         let mut cells = Vec::new();
         for c in 0..(max_cars + 1) {
-            let state_id = new_state_id(r, c);
+            let state_id = State::new(r, c);
             let policy_actions = &policy
                 .states
                 .get(&state_id)
                 .unwrap_or(&empty_policy_state)
                 .actions;
 
-            let symbol = match policy_actions.len() {
-                0 => " ",
-                1 => policy_actions.iter().nth(0).unwrap().0,
-                _ => "?",
+            match policy_actions.len() {
+                0 => cells.push(Cell::new(" ")),
+                1 => cells.push(Cell::new(
+                    format!("{}", policy_actions.iter().nth(0).unwrap().0).as_str(),
+                )),
+                _ => cells.push(Cell::new("?")),
             };
-
-            cells.push(Cell::new(symbol));
         }
         table.add_row(Row::new(cells));
     }

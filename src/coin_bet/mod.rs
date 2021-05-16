@@ -12,15 +12,7 @@ use crate::solver::*;
 
 const LIMIT: i32 = 100;
 
-pub fn new_state_id(money: i32) -> StateId {
-    format!("{}", money)
-}
-
-pub fn new_action_id(bet: i32) -> StateId {
-    format!("{}", bet)
-}
-
-pub fn new_coin_env(heads_prob: f64) -> Env {
+pub fn new_coin_env(heads_prob: f64) -> Env<i32, i32> {
     let mut states = HashMap::new();
 
     // Loop over current amount of money.
@@ -32,7 +24,7 @@ pub fn new_coin_env(heads_prob: f64) -> Env {
             let mut action_dests = HashMap::new();
             // Win destination.
             action_dests.insert(
-                new_state_id((money + bet).min(LIMIT)),
+                (money + bet).min(LIMIT),
                 ActionDestination {
                     probability: heads_prob,
                     reward: if money + bet >= LIMIT { 1.0 } else { 0.0 },
@@ -40,7 +32,7 @@ pub fn new_coin_env(heads_prob: f64) -> Env {
             );
             // Lose destination.
             action_dests.insert(
-                new_state_id((money - bet).max(0)),
+                (money - bet).max(0),
                 ActionDestination {
                     probability: 1.0 - heads_prob,
                     reward: 0.0,
@@ -48,34 +40,29 @@ pub fn new_coin_env(heads_prob: f64) -> Env {
             );
 
             actions.insert(
-                new_action_id(bet),
-                Action {
+                bet,
+                ActionResult {
                     dest_states: action_dests,
                 },
             );
         }
 
-        states.insert(new_state_id(money), State { actions: actions });
+        states.insert(money, StateActions { actions: actions });
     }
 
     // Add final states.
-    states.insert(new_state_id(0), State::default());
-    states.insert(
-        new_state_id(LIMIT),
-        State {
-            actions: HashMap::new(),
-        },
-    );
+    states.insert(0, StateActions::default());
+    states.insert(LIMIT, StateActions::default());
 
     Env { states: states }
 }
 
-pub fn make_cautious_policy() -> Policy {
+pub fn make_cautious_policy() -> Policy<i32, i32> {
     let policy_states = (1..LIMIT)
         .map(|i| {
             let mut actions = HashMap::new();
-            actions.insert(new_action_id(1), 1.0);
-            (new_state_id(i), PolicyState { actions: actions })
+            actions.insert(1, 1.0);
+            (i, PolicyState { actions: actions })
         })
         .collect();
 
@@ -84,14 +71,9 @@ pub fn make_cautious_policy() -> Policy {
     }
 }
 
-pub fn print_coin_state_values(state_values: &HashMap<StateId, f64>) {
+pub fn print_coin_state_values(state_values: &HashMap<i32, f64>) {
     let values = (1..LIMIT)
-        .map(|i| {
-            (
-                i as f64,
-                *state_values.get(&new_state_id(i)).unwrap_or(&0.0),
-            )
-        })
+        .map(|i| (i as f64, *state_values.get(&i).unwrap_or(&0.0)))
         .collect();
     let s1 = Plot::new(values).point_style(PointStyle::new().marker(PointMarker::Circle));
     let v = ContinuousView::new()
@@ -105,18 +87,14 @@ pub fn print_coin_state_values(state_values: &HashMap<StateId, f64>) {
     );
 }
 
-pub fn print_coin_policy(policy: &Policy) {
+pub fn print_coin_policy(policy: &Policy<i32, i32>) {
     let values: Vec<(f64, f64)> = (1..LIMIT)
         .map(|i| {
-            let policy_actions = &policy.states.get(&new_state_id(i)).unwrap().actions;
+            let policy_actions = &policy.states.get(&i).unwrap().actions;
 
-            let min_bet = policy_actions
-                .keys()
-                .map(|action_id| action_id.parse::<i32>().unwrap())
-                .max()
-                .unwrap();
+            let min_bet = policy_actions.keys().max().unwrap();
 
-            (i as f64, min_bet as f64)
+            (i as f64, (*min_bet) as f64)
         })
         .collect();
 
