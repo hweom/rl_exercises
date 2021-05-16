@@ -51,7 +51,7 @@ pub fn new_grid_random_policy(env: &Env) -> Policy {
         let total_actions = state.actions.len();
         let mut policy_state_actions = HashMap::new();
         for action_id in state.actions.keys() {
-            policy_state_actions.insert(action_id.clone(), 1.0 / total_actions as f32);
+            policy_state_actions.insert(action_id.clone(), 1.0 / total_actions as f64);
         }
         policy_states.insert(
             state_id.clone(),
@@ -66,7 +66,7 @@ pub fn new_grid_random_policy(env: &Env) -> Policy {
     }
 }
 
-pub fn print_grid_state_values(state_values: &HashMap<StateId, f32>, rows: i32, cols: i32) {
+pub fn print_grid_state_values(state_values: &HashMap<StateId, f64>, rows: i32, cols: i32) {
     let mut table = Table::new();
     for r in 0..rows {
         let mut cells = Vec::new();
