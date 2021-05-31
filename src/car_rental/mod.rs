@@ -3,7 +3,7 @@ use std::collections::HashMap;
 use factorial::Factorial;
 use prettytable::{Cell, Row, Table};
 
-use crate::solver::*;
+use crate::solver::{explicit::*, *};
 
 const MAX_MOVES: i32 = 5;
 const RENT_REWARD: f64 = 10.0;
@@ -227,4 +227,34 @@ pub fn print_car_rental_policy(policy: &Policy<State, i32>, max_cars: i32) {
         table.add_row(Row::new(cells));
     }
     table.printstd();
+}
+
+pub fn run() {
+    // Create environment.
+    println!("Creating environment");
+    let env = new_car_rental_env(20);
+
+    // Create policy.
+    println!("Creating intial policy");
+    let mut policy = new_car_rental_noop_policy(&env);
+    let mut state_values = HashMap::new();
+
+    for i in 0..5 {
+        println!("Evaluating policy");
+        for i in 0..10000 {
+            let (new_state_values, delta) =
+                evaluate_policy_iteration(&env, &policy, &state_values, 0.9);
+            state_values = new_state_values;
+            if i % 10 == 0 {
+                println!("{}: delta {}", i, delta);
+            }
+            if delta < 0.0001 {
+                break;
+            }
+        }
+        println!("done!");
+
+        policy = make_greedy_policy(&env, &state_values, 0.9);
+        print_car_rental_policy(&policy, 20);
+    }
 }

@@ -3,6 +3,7 @@ use std::fmt;
 
 use prettytable::{Cell, Row, Table};
 
+use crate::solver::explicit::*;
 use crate::solver::*;
 
 const UP: &'static str = "↑";
