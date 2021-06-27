@@ -29,18 +29,6 @@ pub struct Env<S: Eq + Hash, A: Eq + Hash> {
     pub states: HashMap<S, StateActions<S, A>>,
 }
 
-#[derive(Debug, Default, Clone)]
-pub struct PolicyState<A: Eq + Hash> {
-    // Possible actions and their probabilities.
-    // All probabilities must sum to 1.
-    pub actions: HashMap<A, f64>,
-}
-
-#[derive(Debug, Default, Clone)]
-pub struct Policy<S: Eq + Hash, A: Eq + Hash> {
-    pub states: HashMap<S, PolicyState<A>>,
-}
-
 // Returns the action value given the action results and state value function.
 fn get_action_value<S: Eq + Hash>(
     action: &ActionResult<S>,

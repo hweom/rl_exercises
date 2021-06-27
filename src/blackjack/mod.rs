@@ -157,7 +157,7 @@ pub fn stick_at_20_policy(state: &State) -> Action {
     }
 }
 
-pub fn print_policy(policy: &explicit::Policy<State, Action>) {
+pub fn print_policy(policy: &Policy<State, Action>) {
     let all_cards: Vec<Card> = (2..=10)
         .map(|i| Card::Value(i))
         .chain((&[Card::Ace, Card::Face]).iter().map(|c| *c))
