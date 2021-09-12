@@ -153,6 +153,7 @@ mod tests {
     }
 
     #[test]
+    #[ignore]
     fn episodic_semi_gradient_sarsa_random_walk_test() {
         use RandomWalkAction as A;
 
