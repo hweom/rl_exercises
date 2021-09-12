@@ -1,5 +1,92 @@
 use crate::solver::*;
 
+// Determines the next action from given state following an ε-greedy policy derived from given
+// state-action values.
+fn soft_greedy_action<S, A, RandomAction>(
+    random_action: &RandomAction,
+    action_values: &HashMap<S, HashMap<A, f64>>,
+    state: &S,
+    exploration_fraction: f64,
+) -> A
+where
+    S: Eq + Hash,
+    A: Eq + Hash + Clone,
+    RandomAction: Fn(&S) -> A,
+{
+    let maybe_state_action_values = action_values.get(&state);
+
+    // If we never explored this state before, or if we pass the exploration check, choose the
+    // action at random.
+    if maybe_state_action_values.is_none() || rand::random::<f64>() <= exploration_fraction {
+        return random_action(&state);
+    }
+
+    // We have already explored this state -- pick the action with maximum value.
+    let state_action_values = maybe_state_action_values.unwrap();
+
+    // Find the maximum action value.
+    let max_value = state_action_values
+        .iter()
+        .map(|(_, v)| v)
+        .fold(f64::NEG_INFINITY, |a, b| a.max(*b));
+
+    // Find the actions with max action value (can be multiple!).
+    let greedy_actions: Vec<A> = state_action_values
+        .iter()
+        .filter(|(_, v)| (*v - max_value).abs() < 1e-6)
+        .map(|(a, v)| a.clone())
+        .collect();
+
+    // If there is only one "best" action, pick it. Otherwise, choose at random among all "best".
+    assert!(greedy_actions.len() > 0);
+    if greedy_actions.len() == 1 {
+        greedy_actions[0].clone()
+    } else {
+        greedy_actions[rand::random::<usize>() % greedy_actions.len()].clone()
+    }
+}
+
+// Computes the expected returns from a given state if following an ε-greedy policy derived from
+// given state-action values. State itself is not passed, only the values of the actions from this
+// state is given.
+fn expected_returns<A: Eq + Hash>(
+    state_action_values: &HashMap<A, f64>,
+    exploration_fraction: f64,
+) -> f64 {
+    assert!(!state_action_values.is_empty());
+
+    // If there is just a single action, then it's probability is 1.
+    if state_action_values.len() == 1 {
+        return *state_action_values.iter().nth(0).unwrap().1;
+    }
+
+    // Find the maximum action value.
+    let max_value = state_action_values
+        .iter()
+        .map(|(_, v)| v)
+        .fold(f64::NEG_INFINITY, |a, b| a.max(*b));
+
+    // Find the number of actions with max action value (can be multiple!).
+    let greedy_actions_count = state_action_values
+        .iter()
+        .filter(|(_, v)| (*v - max_value).abs() < 1e-6)
+        .count();
+
+    assert!(greedy_actions_count > 0);
+
+    let others_probability = exploration_fraction / (state_action_values.len() as f64);
+    let greedy_probability =
+        others_probability + (1.0 - exploration_fraction) / (greedy_actions_count as f64);
+
+    state_action_values
+        .iter()
+        .map(|(_, v)| match (*v - max_value).abs() < 1e-6 {
+            true => greedy_probability * v,
+            false => others_probability * v,
+        })
+        .sum()
+}
+
 pub fn find_action_values_expected_sarsa<S, A, StartState, RandomAction, NextState>(
     start_state: &StartState,
     random_action: &RandomAction,
@@ -21,40 +108,12 @@ where
     for _ in 0..iterations {
         // Generate a single episode.
         let mut state = start_state();
+
+        // Go to the next state until a final state is reached.
         loop {
             // Determine the next action using ε-greedy policy from Q.
-            let action = {
-                let maybe_state_action_values = action_values.get(&state);
-                // Pick greedy action if available and failing "exploration" probability check.
-                // Otherwise, choose at random from all available actions.
-                if maybe_state_action_values.is_some()
-                    && rand::random::<f64>() >= exploration_fraction
-                {
-                    let state_action_values = maybe_state_action_values.unwrap();
-
-                    // Find the maximum action value.
-                    let max_value = state_action_values
-                        .iter()
-                        .map(|(_, v)| v)
-                        .fold(f64::NEG_INFINITY, |a, b| a.max(*b));
-
-                    // Find the actions with max action value (can be multiple!).
-                    let greedy_actions: Vec<A> = state_action_values
-                        .iter()
-                        .filter(|(_, v)| (*v - max_value).abs() < 1e-6)
-                        .map(|(a, v)| a.clone())
-                        .collect();
-
-                    assert!(greedy_actions.len() > 0);
-                    if greedy_actions.len() == 1 {
-                        greedy_actions[0].clone()
-                    } else {
-                        greedy_actions[rand::random::<usize>() % greedy_actions.len()].clone()
-                    }
-                } else {
-                    random_action(&state)
-                }
-            };
+            let action =
+                soft_greedy_action(random_action, &action_values, &state, exploration_fraction);
 
             let state_action_value = *action_values
                 .get(&state)
@@ -84,39 +143,7 @@ where
             // Compute the returns from state S₊₁.
             let returns = action_values
                 .get(&new_state)
-                .map(|av| {
-                    assert!(!av.is_empty());
-
-                    // If there is just a single action, then it's probability is 1.
-                    if av.len() == 1 {
-                        return *av.iter().nth(0).unwrap().1;
-                    }
-
-                    // Find the maximum action value.
-                    let max_value = av
-                        .iter()
-                        .map(|(_, v)| v)
-                        .fold(f64::NEG_INFINITY, |a, b| a.max(*b));
-
-                    // Find the number of actions with max action value (can be multiple!).
-                    let greedy_actions_count = av
-                        .iter()
-                        .filter(|(_, v)| (*v - max_value).abs() < 1e-6)
-                        .count();
-
-                    assert!(greedy_actions_count > 0);
-
-                    let others_probability = exploration_fraction / (av.len() as f64);
-                    let greedy_probability = others_probability
-                        + (1.0 - exploration_fraction) / (greedy_actions_count as f64);
-
-                    av.iter()
-                        .map(|(_, v)| match (*v - max_value).abs() < 1e-6 {
-                            true => greedy_probability * v,
-                            false => others_probability * v,
-                        })
-                        .sum()
-                })
+                .map(|av| expected_returns(&av, exploration_fraction))
                 .unwrap_or(0.0);
 
             // Now update Q(S, A).

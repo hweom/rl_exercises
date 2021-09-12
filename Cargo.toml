@@ -8,6 +8,7 @@ edition = "2018"
 
 [dependencies]
 factorial = "0.2"
+nalgebra = "0.29"
 prettytable-rs = "^0.8"
 plotlib = "0.5"
 rand = "0.8"

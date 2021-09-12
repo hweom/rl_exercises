@@ -1,6 +1,8 @@
+pub mod approximate;
 pub mod explicit;
 pub mod monte_carlo;
 pub mod td;
+pub mod tile;
 
 use std::collections::HashMap;
 use std::fmt::Debug;
