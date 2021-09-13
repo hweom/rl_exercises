@@ -1,5 +1,3 @@
-use nalgebra::DVector;
-
 // Left and right bound for an interval.
 // By convention, the right boundary is excluded, i.e. [min, max).
 pub struct Bounds<T> {
@@ -57,37 +55,33 @@ impl Tiling {
     fn from_dimensions_and_origin(
         continuous_dimensions: &Vec<ContinuousDimension>,
         integer_dimensions: &Vec<Bounds<i32>>,
-        origin: &DVector<f64>,
+        origin: &Vec<f64>,
     ) -> Self {
         let c_len = continuous_dimensions.len();
         let i_len = integer_dimensions.len();
 
-        let step_size = DVector::from_iterator(
-            c_len,
-            continuous_dimensions
-                .iter()
-                .map(|d| (d.bounds.max - d.bounds.min) / (d.step_count) as f64),
-        );
+        let step_size: Vec<f64> = continuous_dimensions
+            .iter()
+            .map(|d| (d.bounds.max - d.bounds.min) / (d.step_count) as f64)
+            .collect();
 
         let continuous_partitions: Vec<ContinuousPartition> = (0..c_len)
-                .map(|i| ContinuousPartition {
-                    origin: origin[i],
-                    step_size: step_size[i],
-                    step_count: continuous_dimensions[i].step_count,
-                })
-                .collect();
-        
+            .map(|i| ContinuousPartition {
+                origin: origin[i],
+                step_size: step_size[i],
+                step_count: continuous_dimensions[i].step_count,
+            })
+            .collect();
         let integer_partitions: Vec<IntegerPartition> = (0..i_len)
-                .map(|i| IntegerPartition {
-                    origin: integer_dimensions[i].min,
-                    step_count: (integer_dimensions[i].max - integer_dimensions[i].min) as usize,
-                })
-                .collect();
-        
+            .map(|i| IntegerPartition {
+                origin: integer_dimensions[i].min,
+                step_count: (integer_dimensions[i].max - integer_dimensions[i].min) as usize,
+            })
+            .collect();
         let tile_count: usize = continuous_partitions
             .iter()
             .fold(1, |acc, p| acc * p.step_count)
-            *integer_partitions
+            * integer_partitions
                 .iter()
                 .fold(1, |acc, p| acc * p.step_count);
 
@@ -99,7 +93,7 @@ impl Tiling {
     }
 
     // Returns an index of a tile containing the given point in the state space.
-    fn get_tile(&self, pc: &DVector<f64>, pi: &DVector<i32>) -> usize {
+    fn get_tile(&self, pc: &[f64], pi: &[i32]) -> usize {
         assert_eq!(pc.len(), self.continuous_partitions.len());
         assert_eq!(pi.len(), self.integer_partitions.len());
 
@@ -141,16 +135,15 @@ impl TilingSet {
         let c_len = continuous_dimensions.len();
 
         let mut tilings = Vec::new();
-        let mut origin =
-            DVector::from_iterator(c_len, continuous_dimensions.iter().map(|d| d.bounds.min));
-        let step_size = DVector::from_iterator(
-            c_len,
-            continuous_dimensions
-                .iter()
-                .map(|d| (d.bounds.max - d.bounds.min) / (d.step_count) as f64),
-        );
-        let offset_step =
-            DVector::from_iterator(c_len, (0..c_len).map(|i| step_size[i] / count as f64));
+
+        // Tile sizes for all continuous dimension
+        // (for integer dimensions, tile size is always 1).
+        let tile_size: Vec<f64> = continuous_dimensions
+            .iter()
+            .map(|d| (d.bounds.max - d.bounds.min) / (d.step_count) as f64)
+            .collect();
+        let mut origin: Vec<f64> = continuous_dimensions.iter().map(|d| d.bounds.min).collect();
+        let offset_step: Vec<f64> = (0..c_len).map(|i| tile_size[i] / (count as f64)).collect();
 
         for _ in 0..count {
             tilings.push(Tiling::from_dimensions_and_origin(
@@ -159,7 +152,9 @@ impl TilingSet {
                 &origin,
             ));
 
-            origin += &offset_step;
+            for i in 0..origin.len() {
+                origin[i] += offset_step[i];
+            }
         }
 
         TilingSet { tilings: tilings }
@@ -178,7 +173,7 @@ impl TilingSet {
     // Returns the indices of tiles (across all tilings, one tile per tiling)
     // that contain the given point in the state space.
     // Dimension of the return vector is equal to the number of tilings, or count().
-    pub fn get_tiles(&self, pc: &DVector<f64>, pi: &DVector<i32>) -> Vec<usize> {
+    pub fn get_tiles(&self, pc: &[f64], pi: &[i32]) -> Vec<usize> {
         let mut feature_indices = Vec::with_capacity(self.tilings.len());
         let mut index_offset = 0;
         for t in &self.tilings {
@@ -193,14 +188,6 @@ impl TilingSet {
 mod tests {
     use super::*;
 
-    fn pc(items: &[f64]) -> DVector<f64> {
-        DVector::from_iterator(items.len(), items.iter().map(|d| *d))
-    }
-
-    fn pi(items: &[i32]) -> DVector<i32> {
-        DVector::from_iterator(items.len(), items.iter().map(|d| *d))
-    }
-
     #[test]
     fn single_tiling_1d() {
         let c1 = ContinuousDimension::new(0.0, 10.0, 10);
@@ -209,10 +196,10 @@ mod tests {
         assert_eq!(tilings.count(), 1);
         assert_eq!(tilings.tile_count(), 10);
 
-        assert_eq!(tilings.get_tiles(&pc(&[0.0]), &pi(&[])), vec![0]);
-        assert_eq!(tilings.get_tiles(&pc(&[-1.0]), &pi(&[])), vec![0]);
-        assert_eq!(tilings.get_tiles(&pc(&[9.5]), &pi(&[])), vec![9]);
-        assert_eq!(tilings.get_tiles(&pc(&[11.0]), &pi(&[])), vec![9]);
+        assert_eq!(tilings.get_tiles(&[0.0], &[]), vec![0]);
+        assert_eq!(tilings.get_tiles(&[-1.0], &[]), vec![0]);
+        assert_eq!(tilings.get_tiles(&[9.5], &[]), vec![9]);
+        assert_eq!(tilings.get_tiles(&[11.0], &[]), vec![9]);
     }
 
     #[test]
@@ -224,8 +211,8 @@ mod tests {
         assert_eq!(tilings.count(), 1);
         assert_eq!(tilings.tile_count(), 200);
 
-        assert_eq!(tilings.get_tiles(&pc(&[-1.0, 0.0]), &pi(&[])), vec![9]);
-        assert_eq!(tilings.get_tiles(&pc(&[-1.0, 1.0]), &pi(&[])), vec![29]);
+        assert_eq!(tilings.get_tiles(&[-1.0, 0.0], &[]), vec![9]);
+        assert_eq!(tilings.get_tiles(&[-1.0, 1.0], &[]), vec![29]);
     }
 
     #[test]
@@ -236,11 +223,11 @@ mod tests {
         assert_eq!(tilings.count(), 1);
         assert_eq!(tilings.tile_count(), 5);
 
-        assert_eq!(tilings.get_tiles(&pc(&[]), &pi(&[0])), vec![0]);
-        assert_eq!(tilings.get_tiles(&pc(&[]), &pi(&[-1])), vec![0]);
-        assert_eq!(tilings.get_tiles(&pc(&[]), &pi(&[1])), vec![1]);
-        assert_eq!(tilings.get_tiles(&pc(&[]), &pi(&[4])), vec![4]);
-        assert_eq!(tilings.get_tiles(&pc(&[]), &pi(&[5])), vec![4]);
+        assert_eq!(tilings.get_tiles(&[], &[0]), vec![0]);
+        assert_eq!(tilings.get_tiles(&[], &[-1]), vec![0]);
+        assert_eq!(tilings.get_tiles(&[], &[1]), vec![1]);
+        assert_eq!(tilings.get_tiles(&[], &[4]), vec![4]);
+        assert_eq!(tilings.get_tiles(&[], &[5]), vec![4]);
     }
 
     #[test]
@@ -252,8 +239,8 @@ mod tests {
         assert_eq!(tilings.count(), 1);
         assert_eq!(tilings.tile_count(), 50);
 
-        assert_eq!(tilings.get_tiles(&pc(&[0.0]), &pi(&[0])), vec![0]);
-        assert_eq!(tilings.get_tiles(&pc(&[0.0]), &pi(&[1])), vec![10]);
+        assert_eq!(tilings.get_tiles(&[0.0], &[0]), vec![0]);
+        assert_eq!(tilings.get_tiles(&[0.0], &[1]), vec![10]);
     }
 
     #[test]
@@ -266,16 +253,10 @@ mod tests {
         assert_eq!(tilings.tile_count(), 150);
 
         // Point (0, 0) should be in tile 0 on all tilings.
-        assert_eq!(
-            tilings.get_tiles(&pc(&[0.0]), &pi(&[0])),
-            vec![0, 50, 100]
-        );
+        assert_eq!(tilings.get_tiles(&[0.0], &[0]), vec![0, 50, 100]);
 
-        // Offset step is 1.0/3, so point 1.4 should be on tile 1 for tilings
+        // Offset step is 1.0/3, so point 1.4 should be on tile 1 for tiling
         // 0 and 1, but tile 0 on tiling 2.
-        assert_eq!(
-            tilings.get_tiles(&pc(&[1.4]), &pi(&[0])),
-            vec![1, 51, 100]
-        );
+        assert_eq!(tilings.get_tiles(&[1.5], &[0]), vec![1, 51, 100]);
     }
 }

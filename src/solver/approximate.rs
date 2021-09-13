@@ -125,7 +125,10 @@ where
                 (0..actions.len()).filter(|i| is_action_possible(&next_state, &actions[*i])),
                 exploration_fraction,
             );
-            let next_features = DVector::from_vec(state_action_features(&next_state, &actions[next_action_index]));
+            let next_features = DVector::from_vec(state_action_features(
+                &next_state,
+                &actions[next_action_index],
+            ));
 
             // Compute expected returns.
             let expected_returns = reward + discount * w.dot(&next_features);
@@ -146,19 +149,32 @@ where
 mod tests {
     use super::*;
 
-    #[derive(PartialEq, Eq, Hash, Clone)]
+    #[derive(PartialEq, Eq, Hash, Clone, Copy, Debug)]
     enum RandomWalkAction {
         Left,
         Right,
     }
 
     #[test]
-    #[ignore]
     fn episodic_semi_gradient_sarsa_random_walk_test() {
         use RandomWalkAction as A;
 
-        let start_state = || rand::random::<usize>() % 100;
-        let state_action_features = |s: &usize, a: &A| vec![*s as f64];
+        let state_count = 100; // States 0-99.
+
+        // Create 3 tilings for the state space.
+        let tiling = tile::TilingSet::from_dimensions(
+            &vec![tile::ContinuousDimension::new(0.0, 100.0, 10)],
+            &vec![tile::Bounds::new(0, 2)],
+            5,
+        );
+        let state_action_features = |s: &usize, a: &A| {
+            let mut v = vec![0.0; tiling.tile_count()];
+            let tiles = tiling.get_tiles(&[*s as f64], &[*a as i32]);
+            tiles.iter().for_each(|i| v[*i] = 1.0);
+            v
+        };
+
+        let start_state = || rand::random::<usize>() % state_count;
         let is_action_possible = |s: &usize, a: &A| match a {
             A::Left => *s > 0,
             A::Right => true,
@@ -169,7 +185,7 @@ mod tests {
                 (Some(*s - 1), -1.0)
             }
             A::Right => {
-                if *s >= 99 {
+                if *s >= (state_count - 1) {
                     (None, 0.0)
                 } else {
                     (Some(*s + 1), -1.0)
@@ -178,10 +194,10 @@ mod tests {
         };
 
         let discount = 1.0;
-        let exploration_fraction = 0.1;
+        let exploration_fraction = 0.2;
         let alpha = 0.1;
-        let iterations = 1;
-        let value = find_action_values_episodic_semi_gradient_sarsa(
+        let iterations = 500;
+        let w = find_action_values_episodic_semi_gradient_sarsa(
             &vec![A::Left, A::Right],
             &start_state,
             &state_action_features,
@@ -192,5 +208,21 @@ mod tests {
             alpha,
             iterations,
         );
+
+        for s in 0..100 {
+            let features = state_action_features(&s, &A::Right);
+            let value = w.dot(&DVector::from_vec(features));
+            let expected_value = (s as f64) - 100.0;
+            let delta = value - expected_value;
+            // The approximation seems to be worse for states farther away from
+            // final state, so make the margin proportional to this distance.
+            assert!(
+                delta.abs() < expected_value.abs() * 2.0,
+                "For state {}, expected: {}, actual: {}",
+                s,
+                expected_value,
+                value
+            );
+        }
     }
 }
